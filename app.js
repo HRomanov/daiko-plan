@@ -153,12 +153,10 @@ function startInlineEdit(el,day,t,id,custom,text){
   el.draggable=false;
   let textBox=el.querySelector('.task-text');
   let actions=el.querySelector('.actions');
-  let drag=el.querySelector('.drag-handle');
   let tags=textBox.querySelectorAll('.tag');
   let tagHtml=[...tags].map(x=>x.outerHTML).join('');
   textBox.innerHTML=`<div class="inline-editor"><textarea rows="2" placeholder="Введите текст задачи">${esc(text)}</textarea><div class="edit-actions"><button class="cancel-edit">Отмена</button><button class="save-edit">Сохранить</button></div></div>${tagHtml}`;
   actions.classList.add('hidden');
-  if(drag)drag.classList.add('hidden');
   el.classList.add('editing');
   let ta=textBox.querySelector('textarea');
   ta.focus();ta.setSelectionRange(ta.value.length,ta.value.length);
@@ -187,7 +185,7 @@ function addTaskEl(body,day,t,id,custom){
   if(t[1]==='hl')tags.push('<span class="tag t-hl">Хайлайтс</span>');
   (t[4]||[]).forEach(x=>{if(x==='blk')tags.push('<span class="tag t-blk">Блокер</span>');if(x==='hl')tags.push('<span class="tag t-hl">Хайлайтс</span>')});
   if(t[2])tags.push(`<span class="tag t-time">${esc(t[2])}</span>`);
-  el.innerHTML=`<button class="drag-handle" title="Перетащить задачу" aria-label="Перетащить задачу">⠿</button><div class="chk ${state.completed[id]?'on':''}"></div><div class="task-text ${state.completed[id]?'done':''}">${fmt(text)}${tags.join('')}</div><div class="actions"><button title="Редактировать">✎</button><button title="Удалить">×</button></div>`;
+  el.innerHTML=`<div class="chk ${state.completed[id]?'on':''}"></div><div class="task-text ${state.completed[id]?'done':''}">${fmt(text)}${tags.join('')}</div><div class="actions"><button class="drag-handle" title="Переместить задачу вверх/вниз" aria-label="Переместить задачу вверх или вниз">↕</button><button title="Редактировать">✎</button><button title="Удалить">×</button></div>`;
   el.querySelector('.chk').onclick=()=>{state.completed[id]=!state.completed[id];save();render()};
   let handle=el.querySelector('.drag-handle');
   handle.onmousedown=()=>el.classList.add('drag-ready');
@@ -219,8 +217,8 @@ function addTaskEl(body,day,t,id,custom){
     persistDayLayout(day.id,bodyForList(list));
   });
   let bs=el.querySelectorAll('.actions button');
-  bs[0].onclick=()=>startInlineEdit(el,day,t,id,custom,text);
-  bs[1].onclick=()=>{
+  bs[1].onclick=()=>startInlineEdit(el,day,t,id,custom,text);
+  bs[2].onclick=()=>{
     if(custom)state.custom[day.id]=(state.custom[day.id]||[]).filter(x=>x.id!==id);
     else state.deleted[id]=true;
     delete state.completed[id];delete state.edits[id];delete state.taskSections[id];
