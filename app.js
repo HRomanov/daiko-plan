@@ -1,7 +1,7 @@
 const C=window.DAIKO_CONFIG,PLAN=window.DAIKO_PLAN_ID||'daiko-plan-2weeks-2026',LS='daiko-'+PLAN;
 const MET=window.DAIKO_METRICS||{posts:17,hl:2};
 const db=supabase.createClient(C.SUPABASE_URL,C.SUPABASE_PUBLISHABLE_KEY);
-let state={completed:{},edits:{},deleted:{},custom:{},order:{},taskSections:{}},ready=false,timer,dragged=null;
+let state={completed:{},edits:{},deleted:{},custom:{},order:{},taskSections:{},taskDays:{}},ready=false,timer,dragged=null;
 const q=s=>document.querySelector(s),plan=q('#plan');
 
 function norm(x){
@@ -12,7 +12,8 @@ function norm(x){
     deleted:x.deleted||{},
     custom:x.custom||{},
     order:x.order||{},
-    taskSections:x.taskSections||{}
+    taskSections:x.taskSections||{},
+    taskDays:x.taskDays||{}
   };
 }
 function local(){try{return norm(JSON.parse(localStorage.getItem(LS)))}catch{return norm({})}}
@@ -32,16 +33,39 @@ function idFor(day,i,t){return t[3]||`${day.id}-${i}-${btoa(unescape(encodeURICo
 function badgeClass(day){if(day.off)return'b-off';if(day.badge==='Старт')return'b-start';if(day.badge==='Пакет 1')return'b-pack';if(day.badge==='Хайлайтс')return'b-hl';if(day.badge==='Финиш')return'b-fin';if((day.badge||'').includes('Пост'))return'b-post';if(day.badge==='Продажи')return'b-pack';if(day.badge==='Запуск')return'b-start';return''}
 function noteEl(n){if(!n)return'';return`<div class="inline-note n-${esc(n.type||'wait')}"><span>${esc(n.icon||'')}</span><div>${esc(n.text||'')}</div></div>`}
 
-function dayTasks(day){
-  let items=[],ix=0,sectionOrder=[];
-  (day.sections||[]).forEach(([name,tasks,note])=>{
-    sectionOrder.push({name,note});
-    tasks.forEach(t=>{
-      let id=idFor(day,ix++,t);
-      items.push({id,t,custom:false,originalSection:name});
+function customItem(id){
+  for(const dayId of Object.keys(state.custom)){
+    let item=(state.custom[dayId]||[]).find(x=>x.id===id);
+    if(item)return item;
+  }
+  return null;
+}
+function deleteCustom(id){
+  Object.keys(state.custom).forEach(dayId=>{
+    state.custom[dayId]=(state.custom[dayId]||[]).filter(x=>x.id!==id);
+  });
+}
+
+function allTaskItems(){
+  let items=[];
+  DAIKO_DAYS.forEach(srcDay=>{
+    let ix=0;
+    (srcDay.sections||[]).forEach(([name,tasks])=>{
+      tasks.forEach(t=>{
+        let id=idFor(srcDay,ix++,t);
+        items.push({id,t,custom:false,originalSection:name,originalDayId:srcDay.id});
+      });
     });
   });
-  (state.custom[day.id]||[]).forEach(t=>items.push({id:t.id,t:[t.text,t.type||'t'],custom:true,originalSection:'__custom__'}));
+  Object.entries(state.custom).forEach(([srcDayId,tasks])=>{
+    (tasks||[]).forEach(t=>items.push({id:t.id,t:[t.text,t.type||'t'],custom:true,originalSection:'__custom__',originalDayId:srcDayId}));
+  });
+  return items;
+}
+
+function dayTasks(day){
+  let sectionOrder=(day.sections||[]).map(([name,,note])=>({name,note}));
+  let items=allTaskItems().filter(x=>(state.taskDays[x.id]||x.originalDayId)===day.id);
   let rank=new Map((state.order[day.id]||[]).map((id,i)=>[id,i]));
   items.forEach((x,i)=>x._i=i);
   items.sort((a,b)=>{
@@ -49,7 +73,11 @@ function dayTasks(day){
     let br=rank.has(b.id)?rank.get(b.id):100000+b._i;
     return ar-br;
   });
-  items.forEach(x=>x.section=state.taskSections[x.id]||x.originalSection);
+  let defaultSection=sectionOrder[0]?.name||'__custom__';
+  items.forEach(x=>{
+    let moved=(state.taskDays[x.id]||x.originalDayId)!==x.originalDayId;
+    x.section=state.taskSections[x.id]||(moved?defaultSection:x.originalSection);
+  });
   return{items,sectionOrder};
 }
 
@@ -94,16 +122,22 @@ function createTaskList(day,section){
   let list=document.createElement('div');
   list.className='task-list';
   list.dataset.section=section;
+  list.dataset.dayId=day.id;
   list.addEventListener('dragover',e=>{
-    if(!dragged||dragged.dayId!==day.id)return;
+    if(!dragged)return;
     e.preventDefault();
+    e.dataTransfer.dropEffect='move';
     list.classList.add('drag-over');
+    list.closest('.day')?.classList.add('day-drag-over');
   });
-  list.addEventListener('dragleave',e=>{if(!list.contains(e.relatedTarget))list.classList.remove('drag-over')});
+  list.addEventListener('dragleave',e=>{
+    if(!list.contains(e.relatedTarget))list.classList.remove('drag-over');
+  });
   list.addEventListener('drop',e=>{
-    if(!dragged||dragged.dayId!==day.id)return;
+    if(!dragged)return;
     e.preventDefault();
-    list.classList.remove('drag-over');
+    e.stopPropagation();
+    clearDragHighlights();
     let el=document.querySelector(`.task[data-id="${CSS.escape(dragged.id)}"]`);
     if(!el)return;
     let target=e.target.closest('.task');
@@ -111,20 +145,29 @@ function createTaskList(day,section){
       let r=target.getBoundingClientRect();
       list.insertBefore(el,e.clientY<r.top+r.height/2?target:target.nextSibling);
     }else list.append(el);
-    persistDayLayout(day.id,bodyForList(list));
+    persistAllLayouts();
   });
   return list;
 }
-function bodyForList(list){return list.closest('.day-body')}
-function persistDayLayout(dayId,body){
-  let ids=[];
-  body.querySelectorAll('.task-list').forEach(list=>{
-    list.querySelectorAll(':scope > .task').forEach(el=>{
-      ids.push(el.dataset.id);
-      state.taskSections[el.dataset.id]=list.dataset.section;
+
+function clearDragHighlights(){
+  document.querySelectorAll('.task-list.drag-over').forEach(x=>x.classList.remove('drag-over'));
+  document.querySelectorAll('.day.day-drag-over').forEach(x=>x.classList.remove('day-drag-over'));
+}
+
+function persistAllLayouts(){
+  document.querySelectorAll('.day:not(.off)').forEach(dayEl=>{
+    let dayId=dayEl.id,ids=[];
+    dayEl.querySelectorAll('.task-list').forEach(list=>{
+      list.querySelectorAll(':scope > .task').forEach(el=>{
+        let id=el.dataset.id;
+        ids.push(id);
+        state.taskDays[id]=dayId;
+        state.taskSections[id]=list.dataset.section;
+      });
     });
+    state.order[dayId]=ids;
   });
-  state.order[dayId]=ids;
   save();
   render();
 }
@@ -136,6 +179,7 @@ function addInlineCreator(body,day){
   b.onclick=()=>{
     let x={id:'custom-'+crypto.randomUUID(),text:'',type:'t'};
     (state.custom[day.id]??=[]).push(x);
+    state.taskDays[x.id]=day.id;
     state.taskSections[x.id]='__custom__';
     let order=state.order[day.id]??=[];
     order.push(x.id);
@@ -164,7 +208,7 @@ function startInlineEdit(el,day,t,id,custom,text){
   textBox.querySelector('.cancel-edit').onclick=cancel;
   textBox.querySelector('.save-edit').onclick=()=>{
     let n=ta.value.trim();
-    if(custom){let item=(state.custom[day.id]||[]).find(x=>x.id===id);if(item)item.text=n}
+    if(custom){let item=customItem(id);if(item)item.text=n}
     else{if(!n)return;state.edits[id]=n}
     save();render();
   };
@@ -176,7 +220,8 @@ function startInlineEdit(el,day,t,id,custom,text){
 
 function addTaskEl(body,day,t,id,custom){
   if(state.deleted[id])return;
-  let text=custom?t[0]:(state.edits[id]||t[0]),el=document.createElement('div'),tags=[];
+  let item=custom?customItem(id):null;
+  let text=custom?(item?.text??t[0]):(state.edits[id]||t[0]),el=document.createElement('div'),tags=[];
   el.className='task';
   el.dataset.type=t[1]||'t';
   el.dataset.id=id;
@@ -185,11 +230,12 @@ function addTaskEl(body,day,t,id,custom){
   if(t[1]==='hl')tags.push('<span class="tag t-hl">Хайлайтс</span>');
   (t[4]||[]).forEach(x=>{if(x==='blk')tags.push('<span class="tag t-blk">Блокер</span>');if(x==='hl')tags.push('<span class="tag t-hl">Хайлайтс</span>')});
   if(t[2])tags.push(`<span class="tag t-time">${esc(t[2])}</span>`);
-  el.innerHTML=`<div class="chk ${state.completed[id]?'on':''}"></div><div class="task-text ${state.completed[id]?'done':''}">${fmt(text)}${tags.join('')}</div><div class="actions"><button class="drag-handle" title="Переместить задачу вверх/вниз" aria-label="Переместить задачу вверх или вниз">↕</button><button title="Редактировать">✎</button><button title="Удалить">×</button></div>`;
+  el.innerHTML=`<div class="chk ${state.completed[id]?'on':''}"></div><div class="task-text ${state.completed[id]?'done':''}">${fmt(text)}${tags.join('')}</div><div class="actions"><button class="drag-handle" title="Переместить задачу" aria-label="Переместить задачу">↕</button><button title="Редактировать">✎</button><button title="Удалить">×</button></div>`;
   el.querySelector('.chk').onclick=()=>{state.completed[id]=!state.completed[id];save();render()};
   let handle=el.querySelector('.drag-handle');
   handle.onmousedown=()=>el.classList.add('drag-ready');
   handle.onmouseup=()=>el.classList.remove('drag-ready');
+  handle.ontouchstart=()=>el.classList.add('drag-ready');
   el.addEventListener('dragstart',e=>{
     if(!el.classList.contains('drag-ready')){e.preventDefault();return}
     dragged={id,dayId:day.id};
@@ -200,29 +246,30 @@ function addTaskEl(body,day,t,id,custom){
   el.addEventListener('dragend',()=>{
     dragged=null;
     el.classList.remove('dragging','drag-ready');
-    document.querySelectorAll('.task-list.drag-over').forEach(x=>x.classList.remove('drag-over'));
+    clearDragHighlights();
   });
   el.addEventListener('dragover',e=>{
-    if(!dragged||dragged.dayId!==day.id||dragged.id===id)return;
+    if(!dragged||dragged.id===id)return;
     e.preventDefault();
+    e.dataTransfer.dropEffect='move';
   });
   el.addEventListener('drop',e=>{
-    if(!dragged||dragged.dayId!==day.id||dragged.id===id)return;
+    if(!dragged||dragged.id===id)return;
     e.preventDefault();e.stopPropagation();
     let list=el.closest('.task-list');
     let moving=document.querySelector(`.task[data-id="${CSS.escape(dragged.id)}"]`);
     if(!moving)return;
     let r=el.getBoundingClientRect();
     list.insertBefore(moving,e.clientY<r.top+r.height/2?el:el.nextSibling);
-    persistDayLayout(day.id,bodyForList(list));
+    clearDragHighlights();
+    persistAllLayouts();
   });
   let bs=el.querySelectorAll('.actions button');
   bs[1].onclick=()=>startInlineEdit(el,day,t,id,custom,text);
   bs[2].onclick=()=>{
-    if(custom)state.custom[day.id]=(state.custom[day.id]||[]).filter(x=>x.id!==id);
-    else state.deleted[id]=true;
-    delete state.completed[id];delete state.edits[id];delete state.taskSections[id];
-    state.order[day.id]=(state.order[day.id]||[]).filter(x=>x!==id);
+    if(custom)deleteCustom(id);else state.deleted[id]=true;
+    delete state.completed[id];delete state.edits[id];delete state.taskSections[id];delete state.taskDays[id];
+    Object.keys(state.order).forEach(dayId=>state.order[dayId]=(state.order[dayId]||[]).filter(x=>x!==id));
     save();render();
   };
   body.append(el);
