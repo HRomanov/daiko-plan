@@ -232,10 +232,15 @@ function addTaskEl(body,day,t,id,custom){
   if(t[2])tags.push(`<span class="tag t-time">${esc(t[2])}</span>`);
   el.innerHTML=`<div class="chk ${state.completed[id]?'on':''}"></div><div class="task-text ${state.completed[id]?'done':''}">${fmt(text)}${tags.join('')}</div><div class="actions"><button class="drag-handle" title="Переместить задачу" aria-label="Переместить задачу">↕</button><button title="Редактировать">✎</button><button title="Удалить">×</button></div>`;
   el.querySelector('.chk').onclick=()=>{state.completed[id]=!state.completed[id];save();render()};
-  let handle=el.querySelector('.drag-handle');
-  handle.onmousedown=()=>el.classList.add('drag-ready');
-  handle.onmouseup=()=>el.classList.remove('drag-ready');
-  handle.ontouchstart=()=>el.classList.add('drag-ready');
+
+  el.addEventListener('mousedown',e=>{
+    const isHandle=!!e.target.closest('.drag-handle');
+    const blocked=!!e.target.closest('.chk,textarea,input,.inline-editor,.edit-actions')||(!isHandle&&!!e.target.closest('button'));
+    el.classList.toggle('drag-ready',!blocked);
+  });
+  el.addEventListener('mouseup',()=>el.classList.remove('drag-ready'));
+  el.addEventListener('mouseleave',e=>{if(!e.buttons)el.classList.remove('drag-ready')});
+
   el.addEventListener('dragstart',e=>{
     if(!el.classList.contains('drag-ready')){e.preventDefault();return}
     dragged={id,dayId:day.id};
